@@ -2,796 +2,239 @@
 #
 # Specifying rufus-scheduler
 #
-# Wed Apr 17 06:00:59 JST 2013
+# Wed Apr 27 00:51:07 JST 2011
 #
 
-require 'spec_helper'
+require 'spec_base'
 
 
-describe Rufus::Scheduler::Job do
+describe 'job classes' do
 
-  # specify behaviours common to all job classes
-
-  before :each do
-
-    @taoe = Thread.abort_on_exception
-    Thread.abort_on_exception = false
-
-    @ose = $stderr
-    $stderr = StringIO.new
-
-    @scheduler = Rufus::Scheduler.new
+  before(:each) do
+    @s = start_scheduler
+  end
+  after(:each) do
+    stop_scheduler(@s)
   end
 
-  after :each do
+  describe Rufus::Scheduler::Job do
 
-    @scheduler.shutdown
+    describe '#running' do
 
-    Thread.abort_on_exception = @taoe
+      it 'returns false when the job is inactive' do
 
-    $stderr = @ose
-  end
-
-  describe '#last_time' do
-
-    it 'returns nil if the job never fired' do
-
-      job = @scheduler.schedule_in '10d' do; end
-
-      expect(job.last_time).to eq(nil)
-    end
-
-    it 'returns the last time the job fired' do
-
-      job = @scheduler.schedule_in '0s' do; end
-
-      wait_until { job.last_time }
-    end
-  end
-
-  describe '#threads' do
-
-    it 'returns an empty list when the job is not running' do
-
-      job = @scheduler.schedule_in('1d') {}
-
-      expect(job.threads.size).to eq(0)
-    end
-
-    it 'returns an empty list after the job terminated' do
-
-      job = @scheduler.schedule_in('0s') {}
-
-      sleep 0.8
-
-      expect(job.threads.size).to eq(0)
-    end
-
-    it 'lists the threads the job currently runs in' do
-
-      job =
-        @scheduler.schedule_in('0s') do
-          sleep(1)
+        job = @s.in '2d' do
         end
 
-      wait_until { job.threads.size > 0 }
+        job.running.should == false
+      end
 
-      expect(job.threads.first[:rufus_scheduler_job]).to eq(job)
-    end
-  end
+      it 'returns true when the job is active' do
 
-  describe '#kill' do
-
-    it 'has no effect if the job is not running' do
-
-      job = @scheduler.schedule_in '10d' do; end
-
-      tls = Thread.list.size
-
-      job.kill
-
-      expect(Thread.list.size).to eq(tls)
-    end
-
-    it 'makes the threads vacant' do
-
-      counter = 0
-
-      job =
-        @scheduler.schedule_in '0s' do
-          sleep 2
-          counter = counter + 1
+        job = @s.in 0 do
+          sleep(100)
         end
 
-      sleep 1
+        wait_next_tick
 
-      v0 = @scheduler.work_threads(:vacant).size
-      a0 = @scheduler.work_threads(:active).size
-
-      job.kill
-
-      sleep 2
-
-      v1 = @scheduler.work_threads(:vacant).size
-      a1 = @scheduler.work_threads(:active).size
-
-      expect(counter).to eq(0)
-
-      expect(v0).to eq(0)
-      expect(a0).to eq(1)
-
-      expect(v1).to eq(1)
-      expect(a1).to eq(0)
-    end
-  end
-
-  describe '#running?' do
-
-    it 'returns false when the job is not running in any thread' do
-
-      job = @scheduler.schedule_in('1d') {}
-
-      expect(job.running?).to eq(false)
-    end
-
-    it 'returns true when the job is running in at least one thread' do
-
-      job = @scheduler.schedule_in('0s') { sleep(1) }
-
-      wait_until { job.running? }
-    end
-  end
-
-  describe '#scheduled?' do
-
-    it 'returns true when the job is scheduled' do
-
-      job = @scheduler.schedule_in('1d') {}
-
-      expect(job.scheduled?).to eq(true)
-    end
-
-    it 'returns false when the job is not scheduled' do
-
-      job = @scheduler.schedule_in('0.1s') {}
-
-      sleep 0.4
-
-      expect(job.scheduled?).to eq(false)
-    end
-
-    it 'returns true for repeat jobs that are running' do
-
-      job = @scheduler.schedule_interval('0.4s') { sleep(10) }
-
-      wait_until { job.running? }
-
-      expect(job.running?).to eq(true)
-      expect(job.scheduled?).to eq(true)
-    end
-
-    it 'returns false if job is unscheduled' do
-
-      job = @scheduler.schedule_interval('0.1s') { sleep 0.1 }
-      job.unschedule
-
-      sleep 0.3
-
-      expect(job.running?).to eq(false)
-      expect(job.scheduled?).to eq(false)
-    end
-  end
-
-  describe '#call' do
-
-    it 'calls the job (like it were a proc)' do
-
-      counter = 0
-
-      job =
-        @scheduler.schedule_in('0.5s') do
-          counter = counter + 1
-        end
-      job.call
-
-      wait_until { counter > 1 }
-
-      expect(counter).to eq(2)
-    end
-  end
-
-  describe '#call(true)' do
-
-    it 'calls the job and let the scheduler handle errors' do
-
-      $err = nil
-
-      def @scheduler.on_error(job, err)
-        $err = "#{job.class} #{job.original} #{err.message}"
-      rescue
-        p $!
+        job.running.should == true
       end
 
-      job =
-        @scheduler.schedule_in('1d') do
-          fail 'again'
+      it 'returns false when the job hits some error' do
+
+        $exception = nil
+
+        def @s.handle_exception(j, e)
+          #p e
+          $exception = e
         end
 
-      job.call(true)
-
-      expect($err).to eq('Rufus::Scheduler::InJob 1d again')
-    end
-  end
-
-  describe '#call(false)' do
-
-    it 'calls the job and let errors slip through' do
-
-      job =
-        @scheduler.schedule_in('1d') do
-          fail 'fast'
+        job = @s.in 0 do
+          raise "nada"
         end
 
-      begin
+        wait_next_tick
 
-        #job.call(false)
-        job.call # false is the default
-
-        expect(false).to eq(true)
-
-      rescue => ex
-
-        expect(ex.message).to eq('fast')
-      end
-    end
-  end
-
-  context 'job-local variables' do
-
-    describe '#[]=' do
-
-      it 'sets a job-local variable' do
-
-        job =
-          @scheduler.schedule_every '1s' do |job|
-            job[:counter] ||= 0
-            job[:counter] += 1
-          end
-
-        wait_until { job[:counter] && job[:counter] > 1 }
+        $exception.should_not == nil
+        job.running.should == false
       end
     end
 
-    describe '#[]' do
+    describe '#running?' do
 
-      it 'returns nil if there is no such entry' do
+      it 'is an alias for #running' do
 
-        job = @scheduler.schedule_in '1s' do; end
-
-        expect(job[:nada]).to eq(nil)
-      end
-
-      it 'returns the value of a job-local variable' do
-
-        job = @scheduler.schedule_in '1s' do; end
-        job[:x] = :y
-
-        expect(job[:x]).to eq(:y)
-      end
-    end
-
-    describe '#key?' do
-
-      it 'returns true if there is an entry with the given key' do
-
-        job = @scheduler.schedule_in '1s' do; end
-        job[:x] = :y
-
-        expect(job.key?(:a)).to eq(false)
-        expect(job.key?(:x)).to eq(true)
-      end
-    end
-
-    describe '#has_key?' do
-
-      it 'returns true if there is an entry with the given key' do
-
-        job = @scheduler.schedule_in '1s' do; end
-        job[:x] = :y
-
-        expect(job.has_key?(:a)).to eq(false)
-        expect(job.has_key?(:x)).to eq(true)
-      end
-    end
-
-    describe '#keys' do
-
-      it 'returns the array of keys of the job-local variables' do
-
-        job = @scheduler.schedule_in '1s' do; end
-        job[:x] = :y
-        job['hello'] = :z
-        job[123] = {}
-
-        expect(job.keys.sort_by { |k| k.to_s }).to eq([ 123, 'hello', :x ])
-      end
-    end
-
-    describe '#values' do
-
-      it 'returns the array of values of the job-local variables' do
-
-        job = @scheduler.schedule_in '1s' do; end
-        job[:x] = :y
-        job['hello'] = :z
-        job[123] = {}
-
-        expect(job.values).to eq([ :y, :z, {} ])
-      end
-    end
-
-    describe '#entries' do
-
-      it 'returns the array of entry pairs of the job-local variables' do
-
-        job = @scheduler.schedule_in '1s' do; end
-        job[:x] = :y
-        job['hello'] = :z
-        job[123] = {}
-
-        expect(job.entries).to eq([ [ :x, :y ], [ 'hello', :z ], [ 123, {} ] ])
-      end
-    end
-
-    it 'can be set at job scheduling time' do
-
-      j0 = @scheduler.schedule_in '1s', locals: { a: :alpha } do; end
-      j1 = @scheduler.schedule_in '1s', l: { a: :aleph } do; end
-
-      expect(j0[:a]).to eq(:alpha)
-      expect(j1[:a]).to eq(:aleph)
-    end
-
-    it 'is accessible to pre, post, and around hooks before first run' do
-
-      value = rand
-
-      job =
-        @scheduler.schedule_in('0.01s', l: { one: value }, times: 1) do
-          $out << "in the job #{value}"
+        job = @s.in 0 do
+          sleep(100)
         end
 
-      $out = []
+        wait_next_tick
 
-      def @scheduler.on_pre_trigger(job)
-        $out << "pre #{job[:one]}"
-      end
-      def @scheduler.on_post_trigger(job)
-        $out << "post #{job[:one]}"
-      end
-      def @scheduler.around_trigger(job)
-        $out << "around-pre #{job[:one]}"
-        yield
-        $out << "around-post #{job[:one]}"
-      end
-
-      wait_until { $out.size > 4 }
-
-      expect($out).to eq([
-        "pre #{value}",
-        "around-pre #{value}",
-        "in the job #{value}",
-        "around-post #{value}",
-        "post #{value}"
-      ])
-    end
-
-    describe '#name' do
-
-      it 'returns the job name' do
-
-        j = @scheduler.schedule_in '10d', name: 'alice' do; end
-
-        expect(j.name).to eq('alice')
-      end
-    end
-
-    describe '#location' do
-
-      it 'returns the job location in code' do
-
-        j = @scheduler.schedule_in '10d', name: 'alice' do; end
-
-        l = j.location
-
-        expect(l[0]).to match(/\/rufus-scheduler\/spec\/job_spec\.rb$/)
-        expect(l[1]).to eq(__LINE__ - 5)
-      end
-
-      class InstanceHandler
-        def call(job, time); end
-      end
-
-      it 'returns the right location for a callable instance job' do
-
-        j = @scheduler.schedule_in '10d', InstanceHandler
-
-        l = j.source_location
-
-        expect(l[0]).to match(/\/rufus-scheduler\/spec\/job_spec\.rb$/)
-        expect(l[1]).to eq(__LINE__ - 10)
-      end
-
-      it 'returns the right location for a callable class job' do
-
-        j =
-          @scheduler.schedule_in('10h', Class.new do
-            def call; end
-          end)
-
-        l = j.source_location
-
-        expect(l[0]).to match(/\/rufus-scheduler\/spec\/job_spec\.rb$/)
-        expect(l[1]).to eq(__LINE__ - 6)
-      end
-    end
-
-    describe '#locals' do
-
-      it 'returns the locals hash, as is' do
-
-        j = @scheduler.schedule_in '1s', locals: { a: :aa, b: :bb } do; end
-
-        expect(j.locals).to eq(a: :aa, b: :bb)
+        job.running?.should == true
       end
     end
   end
 
-  context ':tag / :tags => [ t0, t1 ]' do
+  describe Rufus::Scheduler::AtJob do
 
-    it 'accepts one tag' do
+    describe '#unschedule' do
 
-      job = @scheduler.schedule_in '10d', tag: 't0' do; end
+      it 'removes the job from the scheduler' do
 
-      expect(job.tags).to eq(%w[ t0 ])
-    end
-
-    it 'accepts an array of tags' do
-
-      job = @scheduler.schedule_in '10d', tag: %w[ t0 t1 ] do; end
-
-      expect(job.tags).to eq(%w[ t0 t1 ])
-    end
-
-    it 'turns tags into strings' do
-
-      job = @scheduler.schedule_in '10d', tags: [ 1, 2 ] do; end
-
-      expect(job.tags).to eq(%w[ 1 2 ])
-    end
-  end
-
-  context 'blocking: true' do
-
-    it 'runs the job in the same thread as the scheduler thread' do
-
-      job = @scheduler.schedule_in('0s', blocking: true) { sleep(1) }
-
-      sleep 0.4
-
-      expect(job.threads.first).to eq(@scheduler.thread)
-
-      sleep 1.4
-
-      expect(job.threads.size).to eq(0)
-    end
-  end
-
-  context 'default one thread per job behaviour' do
-
-    it 'runs the job in a dedicated thread' do
-
-      job = @scheduler.schedule_in('0s') { sleep(1) }
-
-      sleep 0.4
-
-      expect(job.threads.first).not_to eq(@scheduler.thread)
-
-      sleep 1.4
-
-      expect(job.threads.size).to eq(0)
-    end
-  end
-
-  context ':allow_overlapping / :allow_overlap / :overlap' do
-
-    context 'default (overlap: true)' do
-
-      it 'lets a job overlap itself' do
-
-        job = @scheduler.schedule_every('0.3') { sleep(5) }
-
-        sleep 3
-
-        expect(job.threads.size).to be > 1
-      end
-    end
-
-    context 'when overlap: false' do
-
-      it 'prevents a job from overlapping itself' do
-
-        job = @scheduler.schedule_every('0.3', overlap: false) { sleep(5) }
-
-        wait_until { job.threads.size > 0 }
-
-        expect(job.threads.size).to eq(1)
-      end
-    end
-  end
-
-  context ':mutex' do
-
-    context 'mutex: "mutex_name"' do
-
-      it 'prevents concurrent executions' do
-
-        j0 = @scheduler.schedule_in('0s', mutex: 'vladivostok') { sleep(7) }
-        sleep 0.5
-        j1 = @scheduler.schedule_in('0s', mutex: 'vladivostok') { sleep(7) }
-
-        wait_until { j0.threads.size > 0 }
-
-        expect(j0.threads.size).to eq(1)
-        expect(j1.threads.size).to eq(0)
-
-        expect(@scheduler.mutexes.keys).to eq(%w[ vladivostok ])
-      end
-    end
-
-    context 'mutex: mutex_instance' do
-
-      it 'prevents concurrent executions' do
-
-        m = Mutex.new
-
-        j0 = @scheduler.schedule_in('0s', mutex: m) { sleep(3) }
-        j1 = @scheduler.schedule_in('0s', mutex: m) { sleep(3) }
-
-        wait_until { j0.threads.size + j1.threads.size > 0 }
-
-        if j0.threads.any?
-          expect(j0.threads.size).to eq(1)
-          expect(j1.threads.size).to eq(0)
-        else
-          expect(j0.threads.size).to eq(0)
-          expect(j1.threads.size).to eq(1)
+        job = @s.at Time.now + 3 * 3600 do
         end
 
-        expect(@scheduler.mutexes.keys).to eq([])
+        wait_next_tick
+
+        job.unschedule
+
+        @s.jobs.size.should == 0
       end
     end
 
-    context 'mutex: [ array_of_mutex_names_or_instances ]' do
+    describe '#next_time' do
 
-      it 'prevents concurrent executions' do
+      it 'returns the time when the job will trigger' do
 
-        j0 = @scheduler.schedule_in('0s', mutex: %w[ a b ]) { sleep(3) }
-        j1 = @scheduler.schedule_in('0s', mutex: %w[ a b ]) { sleep(3) }
+        t = Time.now + 3 * 3600
 
-        wait_until { j0.threads.size + j1.threads.size > 0 }
-
-        if j0.threads.any?
-          expect(j0.threads.size).to eq(1)
-          expect(j1.threads.size).to eq(0)
-        else
-          expect(j0.threads.size).to eq(0)
-          expect(j1.threads.size).to eq(1)
+        job = @s.at Time.now + 3 * 3600 do
         end
 
-        expect(@scheduler.mutexes.keys.sort).to eq(%w[ a b ])
+        job.next_time.class.should == Time
+        job.next_time.to_i.should == t.to_i
       end
     end
   end
 
-  context 'timeout: duration_or_point_in_time' do
+  describe Rufus::Scheduler::InJob do
 
-    it 'interrupts the job it is stashed to (duration)' do
+    describe '#unschedule' do
 
-      counter = 0
-      toe = nil
+      it 'removes the job from the scheduler' do
 
-      job =
-        @scheduler.schedule_in '0s', timeout: '1s' do
-          begin
-            counter = counter + 1
-            sleep 1.5
-            counter = counter + 1
-          rescue Rufus::Scheduler::TimeoutError => e
-            toe = e
-          end
+        job = @s.in '2d' do
         end
 
-      sleep(3)
+        wait_next_tick
 
-      expect(counter).to eq(1)
-      expect(toe.class).to eq(Rufus::Scheduler::TimeoutError)
+        job.unschedule
+
+        @s.jobs.size.should == 0
+      end
     end
 
-    it 'interrupts the job it is stashed to (point in time)' do
+    describe '#next_time' do
 
-      counter = 0
+      it 'returns the time when the job will trigger' do
 
-      job =
-        @scheduler.schedule_in '0s', timeout: Time.now + 1 do
-          begin
-            counter = counter + 1
-            sleep 1.5
-            counter = counter + 1
-          rescue Rufus::Scheduler::TimeoutError => e
-          end
+        t = Time.now + 3 * 3600
+
+        job = @s.in '3h' do
         end
 
-      sleep(3)
-
-      expect(counter).to eq(1)
-    end
-
-    it 'starts timing when the job enters successfully all its mutexes' do
-
-      t0, t1, t2 = nil
-
-      @scheduler.schedule_in '0s', mutex: 'a' do
-        sleep 1
-        t0 = Time.now
-      end
-
-      job =
-        @scheduler.schedule_in '0.5s', mutex: 'a', timeout: '1s' do
-          begin
-            t1 = Time.now
-            sleep 2
-          rescue Rufus::Scheduler::TimeoutError => e
-            t2 = Time.now
-          end
-        end
-
-      sleep 3
-
-      expect(t0).to be <= t1
-
-      d = t2 - t1
-      expect(d).to be >= 1.0
-      expect(d).to be < 1.5
-    end
-
-    it 'emits the timeout information to $stderr (default #on_error)' do
-
-      @scheduler.every('1s', timeout: '0.5s') do
-        sleep 0.9
-      end
-
-      #wait_until { $stderr.string.match?(/Rufus::Scheduler::TimeoutError/) }
-        # no worky on older Rubies... so
-      wait_until { $stderr.string.match(/Rufus::Scheduler::TimeoutError/) }
-    end
-
-    it 'does not prevent a repeat job from recurring' do
-
-      counter = 0
-
-      @scheduler.every('1s', timeout: '0.5s') do
-        counter = counter + 1
-        sleep 0.9
-      end
-
-      wait_until { counter > 1 }
-    end
-  end
-
-  context 'discard_past: true/false' do
-
-    # specified in spec/job_repeat_spec.rb
-  end
-
-  context 'name: / n:' do
-
-    it 'sets the job name' do
-
-      j0 = @scheduler.schedule_in '10d', name: 'Alfred' do; end
-      j1 = @scheduler.schedule_in '11d', n: 'Alberich' do; end
-
-      expect(j0.name).to eq('Alfred')
-      expect(j1.name).to eq('Alberich')
-    end
-  end
-
-  context 'work time' do
-
-    describe '#last_work_time' do
-
-      it 'starts at 0' do
-
-        job = @scheduler.schedule_every '5m' do; end
-
-        expect(job.last_work_time).to eq(0.0)
-      end
-
-      it 'keeps track of how long the work was upon last trigger' do
-
-        job =
-          @scheduler.schedule_in '0.5s' do
-            sleep 0.7
-          end
-
-        sleep 2
-
-        expect(job.last_work_time).to be >= 0.7
-        expect(job.last_work_time).to be < 0.8
-      end
-    end
-
-    describe '#mean_work_time' do
-
-      it 'starts at 0' do
-
-        job = @scheduler.schedule_every '5m' do; end
-
-        expect(job.mean_work_time).to eq(0.0)
-      end
-
-      it 'gathers work times and computes the mean' do
-
-        count = 0
-
-        job =
-          @scheduler.schedule_every '0.5s' do |j|
-            count = count + 1
-            sleep 0.01 * (j.count + 1)
-          end
-
-        loop { break if count > 7 }
-
-        expect(job.last_work_time).to be > 0.0
-        expect(job.mean_work_time).to be > 0.0
+        job.next_time.class.should == Time
+        job.next_time.to_i.should == t.to_i
       end
     end
   end
 
-  context 'one time job' do
+  describe Rufus::Scheduler::EveryJob do
 
-    describe '#determine_id' do
+    describe '#next_time' do
 
-      it 'returns unique ids' do
+      it 'returns the time when the job will trigger' do
 
-        ids = {}
+        t = Time.now + 3 * 3600
 
-        10_000.times do
-          id = @scheduler.in('1y') {}
-          break if ids[id]
-          ids[id] = true
+        job = @s.every '3h' do
         end
 
-        expect(ids.length).to eq(10_000)
+        job.next_time.class.should == Time
+        job.next_time.to_i.should == t.to_i
+      end
+    end
+
+    describe '#paused?' do
+
+      it 'returns false initially' do
+
+        job = @s.every '3h' do; end
+
+        job.paused?.should == false
+      end
+    end
+
+    describe '#pause' do
+
+      it 'pauses the job' do
+
+        job = @s.every '3h' do; end
+
+        job.pause
+
+        job.paused?.should == true
+      end
+    end
+
+    describe '#resume' do
+
+      it 'resumes the job' do
+
+        job = @s.every '3h' do; end
+
+        job.resume
+
+        job.paused?.should == false
       end
     end
   end
 
-  context 'repeat job' do
+  describe Rufus::Scheduler::CronJob do
 
-    describe '#determine_id' do
+    describe '#next_time' do
 
-      it 'returns unique ids' do
+      it 'returns the time when the job will trigger' do
 
-        ids = {}
-
-        10_000.times do
-          id = @scheduler.every('1y') {}
-          break if ids[id]
-          ids[id] = true
+        job = @s.cron '* * * * *' do
         end
 
-        expect(ids.length).to eq(10_000)
+        job.next_time.class.should == Time
+        (job.next_time.to_i - Time.now.to_i).should satisfy { |v| v < 60 }
+      end
+    end
+
+    describe '#paused?' do
+
+      it 'returns false initially' do
+
+        job = @s.cron '* * * * *' do; end
+
+        job.paused?.should == false
+      end
+    end
+
+    describe '#pause' do
+
+      it 'pauses the job' do
+
+        job = @s.cron '* * * * *' do; end
+
+        job.pause
+
+        job.paused?.should == true
+      end
+    end
+
+    describe '#resume' do
+
+      it 'resumes the job' do
+
+        job = @s.cron '* * * * *' do; end
+
+        job.resume
+
+        job.paused?.should == false
       end
     end
   end
